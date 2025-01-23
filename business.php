@@ -20,7 +20,8 @@ require_once 'data.php';
 $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
 $channel = $connection->channel();
 
-$channel->queue_declare('user_data', false, false, false, false);
+// Declara a fila que será consumida
+$channel->queue_declare('processed_user_data', false, true, false, false);
 
 echo " [*] Waiting for user data. To exit press CTRL+C\n";
 
@@ -47,7 +48,8 @@ $callback = function($msg) {
     }
 };
 
-$channel->basic_consume('user_data', '', false, true, false, false, $callback);
+// Ajustar o consumo para a fila correta
+$channel->basic_consume('processed_user_data', '', false, true, false, false, $callback);
 
 while ($channel->is_consuming()) {
     $channel->wait();
