@@ -36,9 +36,18 @@ $callback = function($msg) {
         // Validação dos dados recebidos
         $validationResult = validateUserData($userData);
         if ($validationResult === true) {
-            // Criando uma instância de UserData para manipulação do banco
-            $data = new UserData();
-            $data->insertUser($userData);
+            // Publicar na fila data_process
+            $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
+            $channel = $connection->channel();
+            $channel->queue_declare('data_process', false, false, false, false);
+
+            $dataMessage = new AMQPMessage(json_encode($userData));
+            $channel->basic_publish($dataMessage, '', 'data_process');
+
+            echo " [x] Dados enviados para a fila data_process.\n";
+
+            $channel->close();
+            $connection->close();
         } else {
             echo "Erro de validação: " . $validationResult . "\n";
         }
@@ -46,6 +55,7 @@ $callback = function($msg) {
         echo "Dados inválidos recebidos.\n";
     }
 };
+
 
 $channel->basic_consume('user_data', '', false, true, false, false, $callback);
 
