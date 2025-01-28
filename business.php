@@ -14,17 +14,17 @@ function validateUserData($userData) {
     return true;
 }
 
-// Requer a classe UserData para trabalhar com o banco
-require_once 'data.php';
-
+// Configuração da conexão RabbitMQ
 $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
 $channel = $connection->channel();
 
+// Declara as filas necessárias
 $channel->queue_declare('user_data', false, false, false, false);
+$channel->queue_declare('data_process', false, false, false, false); // Garante que a fila existe
 
 echo " [*] Waiting for user data. To exit press CTRL+C\n";
 
-$callback = function($msg) {
+$callback = function($msg) use ($connection) {
     $userData = json_decode($msg->getBody(), true);
 
     if ($userData) {
@@ -36,18 +36,16 @@ $callback = function($msg) {
         // Validação dos dados recebidos
         $validationResult = validateUserData($userData);
         if ($validationResult === true) {
-            // Publicar na fila data_process
-            $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
-            $channel = $connection->channel();
-            $channel->queue_declare('data_process', false, false, false, false);
+            // Usa a conexão existente para criar um canal de publicação
+            $publishChannel = $connection->channel();
+            $publishChannel->queue_declare('data_process', false, false, false, false);
 
             $dataMessage = new AMQPMessage(json_encode($userData));
-            $channel->basic_publish($dataMessage, '', 'data_process');
+            $publishChannel->basic_publish($dataMessage, '', 'data_process');
 
             echo " [x] Dados enviados para a fila data_process.\n";
 
-            $channel->close();
-            $connection->close();
+            $publishChannel->close();
         } else {
             echo "Erro de validação: " . $validationResult . "\n";
         }
@@ -55,7 +53,6 @@ $callback = function($msg) {
         echo "Dados inválidos recebidos.\n";
     }
 };
-
 
 $channel->basic_consume('user_data', '', false, true, false, false, $callback);
 

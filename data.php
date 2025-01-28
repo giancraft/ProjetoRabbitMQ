@@ -53,61 +53,79 @@ class UserData {
     }
 }
 
-$callback = function ($msg) {
-    $userData = json_decode($msg->getBody(), true);
-
-    if ($userData) {
-        echo " [x] Processing data for: " . $userData['email'] . "\n";
-
-        $data = new UserData();
-
-        $response = [
-            'name' => $userData['name'],
-            'email' => $userData['email'],
-        ];
-
-        try {
-            if ($data->userExists($userData['email'])) {
-                $response['status'] = 'error';
-                $response['message'] = 'Já existe um cadastro com esse email.';
-            } else {
-                $data->insertUser($userData);
-                $response['status'] = 'success';
-                $response['message'] = 'Usuário cadastrado com sucesso.';
-            }
-        } catch (Exception $e) {
-            $response['status'] = 'error';
-            $response['message'] = 'Erro ao processar dados: ' . $e->getMessage();
-        }
-
-        $responseConnection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
-        $responseChannel = $responseConnection->channel();
-        $responseChannel->queue_declare('response_data', false, false, false, false);
-
-        $responseMessage = new AMQPMessage(json_encode($response));
-        $responseChannel->basic_publish($responseMessage, '', 'response_data');
-
-        echo " [x] Resposta enviada para response_data.\n";
-
-        $responseChannel->close();
-        $responseConnection->close();
-    } else {
-        echo "Dados inválidos recebidos.\n";
-    }
-};
-
-// Configuração da conexão RabbitMQ para o consumidor
+// Configuração da conexão RabbitMQ para o consumidor PRINCIPAL
 $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
 $channel = $connection->channel();
 
-// Declaração da fila de processamento
+// Declaração das filas necessárias
 $channel->queue_declare('data_process', false, false, false, false);
+$channel->queue_declare('response_data', false, false, false, false); // Garante que a fila existe
 
-// Configurando o consumidor para escutar a fila
+// Configuração do consumidor
+$callback = function ($msg) use ($channel) {
+    $userData = json_decode($msg->getBody(), true);
+
+    if (!$userData) {
+        echo "Dados inválidos recebidos.\n";
+        $channel->basic_ack($msg->delivery_tag); // Confirma a mensagem mesmo em caso de erro
+        return;
+    }
+
+    echo " [x] Processing data for: " . $userData['email'] . "\n";
+
+    $data = new UserData();
+    $response = [
+        'name' => $userData['name'],
+        'email' => $userData['email'],
+    ];
+
+    try {
+        if ($data->userExists($userData['email'])) {
+            $response['status'] = 'error';
+            $response['message'] = 'Já existe um cadastro com esse email.';
+        } else {
+            $data->insertUser($userData);
+            $response['status'] = 'success';
+            $response['message'] = 'Usuário cadastrado com sucesso.';
+        }
+    } catch (Exception $e) {
+        $response['status'] = 'error';
+        $response['message'] = 'Erro ao processar dados: ' . $e->getMessage();
+    }
+
+    // Publica a resposta usando o canal existente
+    $responseMessage = new AMQPMessage(
+        json_encode($response),
+        ['delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT]
+    );
+
+    $channel->basic_publish($responseMessage, '', 'response_data');
+    echo " [x] Resposta enviada para response_data.\n";
+
+    // Confirma o processamento da mensagem (ACK)
+    $channel->basic_ack($msg->delivery_tag);
+};
+
+// Configura o consumidor para NÃO usar auto-ack
+$channel->basic_consume(
+    'data_process',
+    '',
+    false, // auto_ack = false
+    false,
+    false,
+    false,
+    $callback
+);
+
 echo " [*] Aguardando mensagens na fila 'data_process'. Para sair, pressione CTRL+C\n";
-$channel->basic_consume('data_process', '', false, true, false, false, $callback);
 
-// Loop para manter o consumidor ativo
-while ($channel->is_consuming()) {
-    $channel->wait();
+try {
+    while ($channel->is_consuming()) {
+        $channel->wait();
+    }
+} catch (\Exception $e) {
+    echo "Erro no consumidor: " . $e->getMessage();
 }
+
+$channel->close();
+$connection->close();
