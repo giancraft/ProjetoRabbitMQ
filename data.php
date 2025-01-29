@@ -53,33 +53,35 @@ class UserData {
     }
 }
 
-// Configuração da conexão RabbitMQ para o consumidor PRINCIPAL
-$connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
-$channel = $connection->channel();
+// Configuração do RabbitMQ
+try {
+    $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
+    $channel = $connection->channel();
+    echo " [*] Conectado ao RabbitMQ.\n";
+} catch (Exception $e) {
+    die("Erro ao conectar ao RabbitMQ: " . $e->getMessage());
+}
 
-// Declaração das filas necessárias
+// Declaração das filas
 $channel->queue_declare('data_process', false, false, false, false);
-$channel->queue_declare('response_data', false, false, false, false); // Garante que a fila existe
+$channel->queue_declare('response_data', false, false, false, false);
 
-// Configuração do consumidor
+// Callback com tratamento de exceções
 $callback = function ($msg) use ($channel) {
-    $userData = json_decode($msg->getBody(), true);
-
-    if (!$userData) {
-        echo "Dados inválidos recebidos.\n";
-        $channel->basic_ack($msg->delivery_tag); // Confirma a mensagem mesmo em caso de erro
-        return;
-    }
-
-    echo " [x] Processing data for: " . $userData['email'] . "\n";
-
-    $data = new UserData();
-    $response = [
-        'name' => $userData['name'],
-        'email' => $userData['email'],
-    ];
-
     try {
+        $userData = json_decode($msg->getBody(), true);
+        if (!$userData) {
+            throw new Exception("Dados inválidos recebidos.");
+        }
+
+        echo " [x] Processando dados para: " . $userData['email'] . "\n";
+
+        $data = new UserData();
+        $response = [
+            'name' => $userData['name'],
+            'email' => $userData['email'],
+        ];
+
         if ($data->userExists($userData['email'])) {
             $response['status'] = 'error';
             $response['message'] = 'Já existe um cadastro com esse email.';
@@ -88,29 +90,26 @@ $callback = function ($msg) use ($channel) {
             $response['status'] = 'success';
             $response['message'] = 'Usuário cadastrado com sucesso.';
         }
+
+        $responseMessage = new AMQPMessage(
+            json_encode($response),
+            ['delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT]
+        );
+        $channel->basic_publish($responseMessage, '', 'response_data');
+        echo " [x] Resposta enviada para response_data.\n";
+
+        $channel->basic_ack($msg->delivery_tag);
     } catch (Exception $e) {
-        $response['status'] = 'error';
-        $response['message'] = 'Erro ao processar dados: ' . $e->getMessage();
+        echo " [!] Erro: " . $e->getMessage() . "\n";
+        $channel->basic_nack($msg->delivery_tag, false, true); // Requeue a mensagem em caso de erro
     }
-
-    // Publica a resposta usando o canal existente
-    $responseMessage = new AMQPMessage(
-        json_encode($response),
-        ['delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT]
-    );
-
-    $channel->basic_publish($responseMessage, '', 'response_data');
-    echo " [x] Resposta enviada para response_data.\n";
-
-    // Confirma o processamento da mensagem (ACK)
-    $channel->basic_ack($msg->delivery_tag);
 };
 
-// Configura o consumidor para NÃO usar auto-ack
+// Configura o consumidor
 $channel->basic_consume(
     'data_process',
     '',
-    false, // auto_ack = false
+    false,
     false,
     false,
     false,
@@ -123,7 +122,7 @@ try {
     while ($channel->is_consuming()) {
         $channel->wait();
     }
-} catch (\Exception $e) {
+} catch (Exception $e) {
     echo "Erro no consumidor: " . $e->getMessage();
 }
 

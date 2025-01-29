@@ -1,34 +1,47 @@
 <?php
+header('Access-Control-Allow-Origin: *');
+header('Content-Type: application/json');
 
 require_once __DIR__ . '/vendor/autoload.php';
 use PhpAmqpLib\Connection\AMQPStreamConnection;
 use PhpAmqpLib\Message\AMQPMessage;
 
-// Verifica se os dados foram enviados via POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Obtém os dados do formulário
     $userData = [
-        'name' => $_POST['name'] ?? 'Nome não fornecido',
-        'email' => $_POST['email'] ?? 'Email não fornecido',
-        'birthdate' => $_POST['birthdate'] ?? 'Data de nascimento não fornecida',
+        'name' => $_POST['name'] ?? '',
+        'email' => $_POST['email'] ?? '',
+        'birthdate' => $_POST['birthdate'] ?? '',
     ];
 
-    // Serializa os dados em JSON
-    $jsonData = json_encode($userData);
+    if (empty($userData['name']) || empty($userData['email']) || empty($userData['birthdate'])) {
+        http_response_code(400);
+        die(json_encode(["message" => "Todos os campos são obrigatórios."]));
+    }
 
-    $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
-    $channel = $connection->channel();
+    if (!filter_var($userData['email'], FILTER_VALIDATE_EMAIL)) {
+        http_response_code(400);
+        die(json_encode(["message" => "E-mail inválido"]));
+    }
 
-    $channel->queue_declare('user_data', false, false, false, false);
+    try {
+        $connection = new AMQPStreamConnection('localhost', 5672, 'admin', 'admin');
+        $channel = $connection->channel();
 
-    $msg = new AMQPMessage($jsonData);
-    $channel->basic_publish($msg, '', 'user_data');
+        $channel->queue_declare('user_data', false, false, false, false);
 
-    echo " [x] Sent user data to queue\n";
+        $msg = new AMQPMessage(json_encode($userData), ['delivery_mode' => AMQPMessage::DELIVERY_MODE_PERSISTENT]);
+        $channel->basic_publish($msg, '', 'user_data');
 
-    $channel->close();
-    $connection->close();
+        echo json_encode(["message" => "Dados enviados para a fila com sucesso!"]);
+
+        $channel->close();
+        $connection->close();
+    } catch (Exception $e) {
+        http_response_code(500);
+        echo json_encode(["message" => "Erro ao conectar com o RabbitMQ: " . $e->getMessage()]);
+    }
 } else {
-    echo "Por favor, envie os dados através do formulário.";
+    http_response_code(405);
+    echo json_encode(["message" => "Método não permitido. Use POST."]);
 }
 ?>
