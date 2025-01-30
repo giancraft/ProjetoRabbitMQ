@@ -98,10 +98,10 @@ $callback = function ($msg) use ($channel) {
         $channel->basic_publish($responseMessage, '', 'response_data');
         echo " [x] Resposta enviada para response_data.\n";
 
-        $channel->basic_ack($msg->delivery_tag);
+        $channel->basic_ack($msg->delivery_info['delivery_tag']);
     } catch (Exception $e) {
         echo " [!] Erro: " . $e->getMessage() . "\n";
-        $channel->basic_nack($msg->delivery_tag, false, true); // Requeue a mensagem em caso de erro
+        $channel->basic_nack($msg->delivery_info['delivery_tag'], false, true); // Requeue a mensagem em caso de erro
     }
 };
 
